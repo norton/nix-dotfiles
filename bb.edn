@@ -1,0 +1,78 @@
+{:tasks
+ {:requires ([babashka.fs :as fs])
+
+  ;; Helpers
+  -nix:install-file "nixos.install.sh"
+
+  ;; Maintenance tasks
+  clean
+  {:depends [-nix:install-file]
+   :doc "Clean all artifacts"
+   :task (do (fs/delete-tree ".cpcache")
+             (fs/delete-if-exists -nix:install-file))}
+
+  ;; Nix
+  ;; https://nixos.org/manual/nix/stable/installation/installing-binary.html
+  -nix:install-file-download
+  {:depends [-nix:install-file]
+   :doc "Download Nix install script"
+   :task (if (fs/exists? -nix:install-file)
+             -nix:install-file
+             (do
+                (shell "curl" "-L" "https://nixos.org/nix/install" "-o" -nix:install-file)
+                (shell "chmod" "a+x" -nix:install-file)
+                -nix:install-file))}
+
+  nix:install
+  {:depends [-nix:install-file-download]
+   :doc "Install Nix multi user installation (and then restart your shell)"
+   :task (shell "sh" -nix:install-file-download "--daemon")}
+
+  nix:info
+  ({:doc "Nix Info"
+    :task (shell "nix-shell -p nix-info --run \"nix-info -m\"")})
+
+  nix:upgrade
+  {:depends []
+   :doc "Upgrade Nix multi user installation"
+   :task (shell "sudo -i sh -c 'nix-channel --update &&
+                                nix-env -iA nixpkgs.nix &&
+                                launchctl remove org.nixos.nix-daemon &&
+                                launchctl load /Library/LaunchDaemons/org.nixos.nix-daemon.plist'")}
+
+  nix:upgrade-packages
+  {:depends []
+   :doc "Upgrade all Nix packages"
+   :task (do
+           (shell "nix-env -u"))}
+
+  nix:gc
+  {:depends []
+   :doc "Garbage collect Nix"
+   :task (do
+           (shell "nix-collect-garbage -d"))}
+
+  nix:uninstall
+  {:depends []
+   :doc "Uninstall Nix multi user installation (and then reboot your system)"
+   :task (do
+           (shell "sudo launchctl unload /Library/LaunchDaemons/org.nixos.nix-daemon.plist")
+           (shell "sudo rm /Library/LaunchDaemons/org.nixos.nix-daemon.plist")
+           (shell "sudo rm -rf
+                   /etc/profile/nix.sh
+                   /etc/nix
+                   /nix
+                   ~root/.nix-profile
+                   ~root/.nix-defexpr
+                   ~root/.nix-channels
+                   ~/.nix-profile
+                   ~/.nix-defexpr
+                   ~/.nix-channels"))}
+
+  nix:uninstall-really-clean
+  {:depends []
+   :doc "Uninstall Nix multi user installation backup files"
+   :task (shell "sudo rm -rf
+                 /etc/bash.bashrc.backup-before-nix
+                 /etc/bashrc.backup-before-nix
+                 /etc/zshrc.backup-before-nix")}}}
