@@ -1,1 +1,3 @@
+nixenv-derivations.edn
 nixos.install.sh
+result
