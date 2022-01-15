@@ -30,21 +30,21 @@
   {:depends [-nix:installer-url -nix:installer-file]
    :doc "Download Nix install script"
    :task (if (fs/exists? -nix:installer-file)
-             -nix:installer-file
-             (do
-                (shell "curl" "-L" -nix:installer-url "-o" -nix:installer-file)
-                (shell "chmod" "a+x" -nix:installer-file)
-                -nix:installer-file))}
+           -nix:installer-file
+           (do
+             (shell "curl" "-L" -nix:installer-url "-o" -nix:installer-file)
+             (shell "chmod" "a+x" -nix:installer-file)
+             -nix:installer-file))}
 
   -nix:query-derivations-file
   {:depends [-nix:derivations-file]
    :doc "Query and cache Nix derivations"
    :task (if (fs/exists? -nix:derivations-file)
-             -nix:derivations-file
-             (do
-                (shell (str "sh -c 'nix-env --query --available --attr-path --json |
+           -nix:derivations-file
+           (do
+             (shell (str "sh -c 'nix-env --query --available --attr-path --json |
                                     jet --from json --to edn --pretty > " -nix:derivations-file "'"))
-                -nix:derivations-file))}
+             -nix:derivations-file))}
 
   nix:install
   {:depends [-nix:installer-file-download]
@@ -133,12 +133,12 @@
   {:depends []
    :doc "Build and switch Nix Darwin on the system (and then logout or reboot your sytem)"
    :task (let [[host] *command-line-args*
-                cfg (str "darwinConfigurations." host ".config.system.build.toplevel")]
+               cfg (str "darwinConfigurations." host ".config.system.build.toplevel")]
            (do
              (if (str/blank? host)
                (throw (AssertionError. "Invalid host: " host)))
-            (shell (str "nix build '.#" cfg "' -v"))
-            (shell (str "./result/sw/bin/darwin-rebuild switch --flake '.#" host "'"))))}
+             (shell (str "nix build '.#" cfg "' -v"))
+             (shell (str "./result/sw/bin/darwin-rebuild switch --flake '.#" host "'"))))}
 
   nix-darwin:uninstall
   {:depends []
@@ -157,10 +157,10 @@
            (->> (map (fn [y]
                        (let [p (re-pattern (str "(?i)" ".*" y ".*"))
                              x (distinct (remove nil? (map (fn [n] (re-matches p n)) pnames)))]
-                          (if (not (empty? x))
-                            {y x}
-                            nil)))
-                      (concat casks formulae))
+                         (if (not (empty? x))
+                           {y x}
+                           nil)))
+                     (concat casks formulae))
                 (remove nil?)
                 println))}
 
