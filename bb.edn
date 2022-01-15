@@ -1,32 +1,66 @@
-{:tasks
- {:requires ([babashka.fs :as fs])
+{:deps
+ {lread/status-line {:git/url "https://github.com/lread/status-line.git"
+                     :sha "35ed39645038e81b42cb15ed6753b8462e60a06d"}}
+ :tasks
+ {:requires ([babashka.fs :as fs]
+             [clojure.edn :as edn]
+             [clojure.string :as str]
+             [lread.status-line :as status])
+  :enter (let [{:keys [name]} (current-task)] (status/line :head "TASK %s %s" name (str/join " " *command-line-args*)))
+  :leave (let [{:keys [name]} (current-task)] (status/line :detail "\nTASK %s done." name))
 
   ;; Helpers
-  -nix:install-file "nixos.install.sh"
+  ;; https://nixos.org/manual/nix/stable/installation/installing-binary.html
+  -nix:installer-url "https://nixos.org/nix/install"
+  -nix:installer-file "nixos.install.sh"
+
+  -nix:derivations-file "nixenv-derivations.edn"
 
   ;; Maintenance tasks
   clean
-  {:depends [-nix:install-file]
+  {:depends [-nix:installer-file -nix:derivations-file]
    :doc "Clean all artifacts"
    :task (do (fs/delete-tree ".cpcache")
-             (fs/delete-if-exists -nix:install-file))}
+             (fs/delete-if-exists "result")
+             (fs/delete-if-exists -nix:installer-file)
+             (fs/delete-if-exists -nix:derivations-file))}
 
   ;; Nix
-  ;; https://nixos.org/manual/nix/stable/installation/installing-binary.html
-  -nix:install-file-download
-  {:depends [-nix:install-file]
+  -nix:installer-file-download
+  {:depends [-nix:installer-url -nix:installer-file]
    :doc "Download Nix install script"
-   :task (if (fs/exists? -nix:install-file)
-             -nix:install-file
-             (do
-                (shell "curl" "-L" "https://nixos.org/nix/install" "-o" -nix:install-file)
-                (shell "chmod" "a+x" -nix:install-file)
-                -nix:install-file))}
+   :task (if (fs/exists? -nix:installer-file)
+           -nix:installer-file
+           (do
+             (shell "curl" "-L" -nix:installer-url "-o" -nix:installer-file)
+             (shell "chmod" "a+x" -nix:installer-file)
+             -nix:installer-file))}
+
+  -nix:query-derivations-file
+  {:depends [-nix:derivations-file]
+   :doc "Query and cache Nix derivations"
+   :task (if (fs/exists? -nix:derivations-file)
+           -nix:derivations-file
+           (do
+             (shell (str "sh -c 'nix-env --query --available --attr-path --json |
+                                    jet --from json --to edn --pretty > " -nix:derivations-file "'"))
+             -nix:derivations-file))}
 
   nix:install
-  {:depends [-nix:install-file-download]
+  {:depends [-nix:installer-file-download]
    :doc "Install Nix multi user installation (and then restart your shell)"
-   :task (shell "sh" -nix:install-file-download "--daemon")}
+   :task (shell "sh" -nix:installer-file-download "--daemon")}
+
+  nix:install-flakes
+  {:depends [-nix:installer-url]
+   :doc "Install Nix unstable and enable flakes"
+   :task (do
+           (shell "sudo -i sh -c 'grep -qF \"experimental-features\" /etc/nix/nix.conf ||
+                                  echo \"experimental-features = nix-command flakes\" |
+                                  tee -a /etc/nix/nix.conf' > /dev/null")
+           (shell "sudo -i sh -c 'nix-env -iA nixpkgs.nixUnstable &&
+                                  launchctl remove org.nixos.nix-daemon &&
+                                  launchctl load /Library/LaunchDaemons/org.nixos.nix-daemon.plist'"))}
 
   nix:info
   ({:doc "Nix Info"
@@ -37,6 +71,7 @@
    :doc "Upgrade Nix multi user installation"
    :task (shell "sudo -i sh -c 'nix-channel --update &&
                                 nix-env -iA nixpkgs.nix &&
+                                nix-env -iA nixpkgs.nixUnstable &&
                                 launchctl remove org.nixos.nix-daemon &&
                                 launchctl load /Library/LaunchDaemons/org.nixos.nix-daemon.plist'")}
 
@@ -45,6 +80,12 @@
    :doc "Upgrade all Nix packages"
    :task (do
            (shell "nix-env -u"))}
+
+  nix:index
+  {:depends []
+   :doc "Build an index for nix-locate"
+   :task (do
+           (shell "nix-index"))}
 
   nix:gc
   {:depends []
@@ -56,9 +97,10 @@
   {:depends []
    :doc "Uninstall Nix multi user installation (and then reboot your system)"
    :task (do
-           (shell "sudo launchctl unload /Library/LaunchDaemons/org.nixos.nix-daemon.plist")
-           (shell "sudo rm /Library/LaunchDaemons/org.nixos.nix-daemon.plist")
-           (shell "sudo rm -rf
+           (shell "sudo -i sh -c 'launchctl stop org.nixos.nix-daemon'")
+           (shell "sudo -i sh -c 'launchctl unload /Library/LaunchDaemons/org.nixos.nix-daemon.plist'")
+           (shell "sudo -i sh -c 'rm /Library/LaunchDaemons/org.nixos.nix-daemon.plist'")
+           (shell "sudo -i sh -c 'rm -rf
                    /etc/profile/nix.sh
                    /etc/nix
                    /nix
@@ -67,7 +109,7 @@
                    ~root/.nix-channels
                    ~/.nix-profile
                    ~/.nix-defexpr
-                   ~/.nix-channels"))}
+                   ~/.nix-channels'"))}
 
   nix:uninstall-really-clean
   {:depends []
@@ -75,4 +117,51 @@
    :task (shell "sudo rm -rf
                  /etc/bash.bashrc.backup-before-nix
                  /etc/bashrc.backup-before-nix
-                 /etc/zshrc.backup-before-nix")}}}
+                 /etc/zshrc.backup-before-nix")}
+
+  nix-flake:ulc
+  {:depends []
+   :doc "Update, Lock, and Check Nix flake"
+   :task (do
+           (shell "nix flake update")
+           (shell "nix flake lock")
+           (shell "nix flake check"))}
+
+  nix-darwin:switch
+  ;; https://gist.github.com/jmatsushita/5c50ef14b4b96cb24ae5268dab613050
+  ;; TBD sudo mv /etc/nix/nix.conf /etc/nix/.nix-darwin.bkp.nix.conf
+  {:depends []
+   :doc "Build and switch Nix Darwin on the system (and then logout or reboot your sytem)"
+   :task (let [[host] *command-line-args*
+               cfg (str "darwinConfigurations." host ".config.system.build.toplevel")]
+           (do
+             (if (str/blank? host)
+               (throw (AssertionError. "Invalid host: " host)))
+             (shell (str "nix build '.#" cfg "' -v"))
+             (shell (str "./result/sw/bin/darwin-rebuild switch --flake '.#" host "'"))))}
+
+  nix-darwin:uninstall
+  {:depends []
+   :doc "Uninstall Nix Darwin (and then reboot your system)"
+   :task (do
+           (shell "nix-shell --command 'nix-build https://github.com/LnL7/nix-darwin/archive/master.tar.gz -A uninstaller'")
+           (shell "./result/bin/darwin-uninstaller"))}
+
+  brew2nix:list
+  {:depends [ -nix:query-derivations-file]
+   :doc "List brew formulas or casks available in nix"
+   :task (let [derivations (edn/read-string (slurp -nix:query-derivations-file))
+               pnames (distinct (map (fn [x] (get x "pname")) (vals derivations)))
+               casks (str/split-lines (:out (shell {:out :string} "brew list -1 --cask")))
+               formulae (str/split-lines (:out (shell {:out :string} "brew list -1 --formulae")))]
+           (->> (map (fn [y]
+                       (let [p (re-pattern (str "(?i)" ".*" y ".*"))
+                             x (distinct (remove nil? (map (fn [n] (re-matches p n)) pnames)))]
+                         (if (not (empty? x))
+                           {y x}
+                           nil)))
+                     (concat casks formulae))
+                (remove nil?)
+                println))}
+
+  }}
